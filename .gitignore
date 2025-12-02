@@ -34,4 +34,4 @@ Thumbs.db
 *.md
 
 # Postman collection files
-*.postman
+*.postman/
