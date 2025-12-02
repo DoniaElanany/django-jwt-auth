@@ -1,0 +1,128 @@
+{
+  "info": {
+    "_postman_id": "3036d193-3adc-45f0-8881-53237bafcf08",
+    "name": "Lightidea_Task1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "rotate_refresh",
+      "id": "47fa6b8c-90ec-477f-9260-aaa7321b8e6a",
+      "protocolProfileBehavior": {
+        "disableBodyPruning": true
+      },
+      "request": {
+        "method": "POST",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"refresh\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc2NTI3ODYzMiwiaWF0IjoxNzY0NjczODMyLCJqdGkiOiIzZGNmZmIzNWY5N2Q0Mjc5ODllMzQyODYwZDlkYzM4YiIsInVzZXJfaWQiOiIxIn0.EncKfgtpzQXA1vxUT4BZDnDhlBN_ZQefZd-UBbMxi1M\"\n    }",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseURL}}/api/token/refresh/",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "api",
+            "token",
+            "refresh",
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "name": "authenticate",
+      "id": "8f7a1070-4fbd-472f-8b0d-2d3863361917",
+      "protocolProfileBehavior": {
+        "disableBodyPruning": true
+      },
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"username\": \"donia\", \"password\": \"password\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseURL}}/api/login/",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "api",
+            "login",
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "name": "invalid credentials",
+      "id": "0824919c-df16-4bfe-9f15-cbb6e6edd31a",
+      "protocolProfileBehavior": {
+        "disableBodyPruning": true
+      },
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"username\": \"donia\", \"password\": \"passwordsss\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseURL}}/api/login/",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "api",
+            "login",
+            ""
+          ]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "id": "252dfbca-83ac-402d-b3e9-5ecf1acfdc57",
+      "key": "baseURL",
+      "value": "",
+      "type": "default"
+    }
+  ]
+}
