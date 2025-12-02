@@ -139,3 +139,5 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': False,
     'ALGORITHM': 'HS256', # * Algorithm used for encoding the JWT using HMAC with SHA-256 hashing (symmetric)
 }
+
+AUTH_USER_MODEL = 'authentication.CustomUser'  # * Use the custom user model defined in the authentication app

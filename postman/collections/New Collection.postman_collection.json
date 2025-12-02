@@ -115,11 +115,48 @@
           ]
         }
       }
+    },
+    {
+      "name": "register",
+      "id": "c9e35cfd-e748-4d65-a65e-534799f2b906",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"test@example.com\",\n  \"name\": \"John Doe\",\n  \"phone_number\": \"+1234567890\",\n  \"password\": \"securepass123\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseURL}}/api/register/",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "api",
+            "register",
+            ""
+          ]
+        }
+      }
     }
   ],
   "variable": [
     {
-      "id": "252dfbca-83ac-402d-b3e9-5ecf1acfdc57",
+      "id": "0c4220e6-ec67-40d3-9954-0d413a35e351",
       "key": "baseURL",
       "value": "",
       "type": "default"
