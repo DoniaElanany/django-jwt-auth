@@ -21,7 +21,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n    \"email\": \"superadmin@lightidea.com\",\n    \"password\": \"SuperAdmin@2024\"\n}"
+							"raw": "{\n    \"email\": \"superadmin@lightidea.com\",\n    \"password\": \"SuperAdmin@123\"\n}"
 						},
 						"url": {
 							"raw": "{{base_url}}/api/auth/login/",
