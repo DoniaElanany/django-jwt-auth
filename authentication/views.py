@@ -6,7 +6,7 @@ from django.contrib.auth import authenticate
 from django.core.exceptions import PermissionDenied
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.exceptions import TokenError
-from .models import CustomUser, UserType
+from .models import CustomUser, UserType, JobRole, DutyRole, Resource, DutyRolePermission, UserPermissionOverride
 from .serializers import (
     UserRegistrationSerializer,
     UserProfileSerializer,
@@ -15,7 +15,13 @@ from .serializers import (
     UserTypeSerializer,
     ChangePasswordSerializer,
     PasswordResetRequestSerializer,
-    SuperAdminPasswordResetSerializer
+    SuperAdminPasswordResetSerializer,
+    JobRoleSerializer,
+    DutyRoleSerializer,
+    ResourceSerializer,
+    DutyRolePermissionSerializer,
+    UserPermissionOverrideSerializer,
+    UserPermissionListSerializer
 )
 from .permissions import (
     require_authentication,
@@ -105,6 +111,13 @@ class UserProfileView(APIView):
     
     def put(self, request):
         """Update own profile"""
+        # Super admins cannot update their own profile
+        if request.user.is_super_admin():
+            return Response(
+                {'error': 'Super admins cannot modify their own profile'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         serializer = UserProfileSerializer(request.user, data=request.data, partial=True)
         
         if serializer.is_valid():
@@ -123,6 +136,13 @@ class ChangePasswordView(APIView):
     
     def post(self, request):
         """Change password for authenticated user"""
+        # Super admins cannot change their own password
+        if request.user.is_super_admin():
+            return Response(
+                {'error': 'Super admins cannot change their own password'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
         
         if serializer.is_valid():
@@ -442,3 +462,431 @@ class SuperAdminPasswordResetView(APIView):
                 {'error': str(e)},
                 status=status.HTTP_403_FORBIDDEN
             )
+
+
+# ========================
+# Permission System Views
+# ========================
+
+from .permission_utils import get_user_permissions
+
+
+class JobRoleListView(APIView):
+    """List all job roles or create a new one"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request):
+        """List all job roles"""
+        job_roles = JobRole.objects.all()
+        serializer = JobRoleSerializer(job_roles, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @require_admin
+    def post(self, request):
+        """Create a new job role"""
+        serializer = JobRoleSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class JobRoleDetailView(APIView):
+    """Retrieve, update, or delete a job role"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request, pk):
+        """Get job role details"""
+        try:
+            job_role = JobRole.objects.get(pk=pk)
+            serializer = JobRoleSerializer(job_role)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except JobRole.DoesNotExist:
+            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @require_admin
+    def put(self, request, pk):
+        """Update job role"""
+        try:
+            job_role = JobRole.objects.get(pk=pk)
+            serializer = JobRoleSerializer(job_role, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except JobRole.DoesNotExist:
+            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @require_admin
+    def delete(self, request, pk):
+        """Delete job role"""
+        try:
+            job_role = JobRole.objects.get(pk=pk)
+            job_role.delete()
+            return Response({'message': 'Job role deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+        except JobRole.DoesNotExist:
+            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class JobRoleDutyRolesView(APIView):
+    """List duty roles for a job role"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request, pk):
+        """List all duty roles for a job role"""
+        try:
+            job_role = JobRole.objects.get(pk=pk)
+            duty_roles = job_role.duty_roles.all()
+            serializer = DutyRoleSerializer(duty_roles, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except JobRole.DoesNotExist:
+            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class JobRoleUsersView(APIView):
+    """List users with a specific job role"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request, pk):
+        """List all users with this job role"""
+        try:
+            job_role = JobRole.objects.get(pk=pk)
+            users = CustomUser.objects.filter(job_role=job_role)
+            serializer = UserProfileSerializer(users, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except JobRole.DoesNotExist:
+            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class AssignDutyRoleView(APIView):
+    """Assign a duty role to a job role"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def post(self, request, job_role_pk):
+        """Assign duty role to job role"""
+        try:
+            job_role = JobRole.objects.get(pk=job_role_pk)
+            duty_role_id = request.data.get('duty_role_id')
+            
+            if not duty_role_id:
+                return Response({'error': 'duty_role_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            try:
+                duty_role = DutyRole.objects.get(pk=duty_role_id)
+                job_role.duty_roles.add(duty_role)
+                return Response({'message': 'Duty role assigned successfully'}, status=status.HTTP_200_OK)
+            except DutyRole.DoesNotExist:
+                return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
+                
+        except JobRole.DoesNotExist:
+            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class RemoveDutyRoleView(APIView):
+    """Remove a duty role from a job role"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def delete(self, request, job_role_pk, duty_role_pk):
+        """Remove duty role from job role"""
+        try:
+            job_role = JobRole.objects.get(pk=job_role_pk)
+            try:
+                duty_role = DutyRole.objects.get(pk=duty_role_pk)
+                job_role.duty_roles.remove(duty_role)
+                return Response({'message': 'Duty role removed successfully'}, status=status.HTTP_200_OK)
+            except DutyRole.DoesNotExist:
+                return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
+        except JobRole.DoesNotExist:
+            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class DutyRoleListView(APIView):
+    """List all duty roles or create a new one"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request):
+        """List all duty roles"""
+        duty_roles = DutyRole.objects.all()
+        serializer = DutyRoleSerializer(duty_roles, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @require_admin
+    def post(self, request):
+        """Create a new duty role"""
+        serializer = DutyRoleSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DutyRoleDetailView(APIView):
+    """Retrieve, update, or delete a duty role"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request, pk):
+        """Get duty role details"""
+        try:
+            duty_role = DutyRole.objects.get(pk=pk)
+            serializer = DutyRoleSerializer(duty_role)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except DutyRole.DoesNotExist:
+            return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @require_admin
+    def put(self, request, pk):
+        """Update duty role"""
+        try:
+            duty_role = DutyRole.objects.get(pk=pk)
+            serializer = DutyRoleSerializer(duty_role, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except DutyRole.DoesNotExist:
+            return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @require_admin
+    def delete(self, request, pk):
+        """Delete duty role"""
+        try:
+            duty_role = DutyRole.objects.get(pk=pk)
+            duty_role.delete()
+            return Response({'message': 'Duty role deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+        except DutyRole.DoesNotExist:
+            return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ResourceListView(APIView):
+    """List all resources or create a new one"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request):
+        """List all resources"""
+        resources = Resource.objects.all()
+        serializer = ResourceSerializer(resources, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @require_admin
+    def post(self, request):
+        """Create a new resource"""
+        serializer = ResourceSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ResourceDetailView(APIView):
+    """Retrieve or delete a resource"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request, pk):
+        """Get resource details"""
+        try:
+            resource = Resource.objects.get(pk=pk)
+            serializer = ResourceSerializer(resource)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Resource.DoesNotExist:
+            return Response({'error': 'Resource not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @require_admin
+    def delete(self, request, pk):
+        """Delete resource"""
+        try:
+            resource = Resource.objects.get(pk=pk)
+            resource.delete()
+            return Response({'message': 'Resource deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+        except Resource.DoesNotExist:
+            return Response({'error': 'Resource not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class DutyRolePermissionView(APIView):
+    """Set or update permissions for a duty role on a resource"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def post(self, request):
+        """Set duty role permission"""
+        serializer = DutyRolePermissionSerializer(data=request.data)
+        if serializer.is_valid():
+            # Check if permission already exists
+            duty_role = serializer.validated_data['duty_role']
+            resource = serializer.validated_data['resource']
+            
+            try:
+                existing = DutyRolePermission.objects.get(duty_role=duty_role, resource=resource)
+                # Update existing
+                serializer = DutyRolePermissionSerializer(existing, data=request.data, partial=True)
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+            except DutyRolePermission.DoesNotExist:
+                # Create new
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @require_admin
+    def get(self, request):
+        """Get permissions for a duty role on a resource"""
+        duty_role_id = request.query_params.get('duty_role_id')
+        resource_id = request.query_params.get('resource_id')
+        
+        if not duty_role_id or not resource_id:
+            return Response(
+                {'error': 'duty_role_id and resource_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            permission = DutyRolePermission.objects.get(
+                duty_role_id=duty_role_id,
+                resource_id=resource_id
+            )
+            serializer = DutyRolePermissionSerializer(permission)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except DutyRolePermission.DoesNotExist:
+            return Response({'error': 'Permission not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class DutyRolePermissionListView(APIView):
+    """List all duty role permissions"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request):
+        """List all duty role permissions with optional filtering"""
+        permissions = DutyRolePermission.objects.all()
+        
+        # Optional filters
+        duty_role_id = request.query_params.get('duty_role_id')
+        resource_id = request.query_params.get('resource_id')
+        
+        if duty_role_id:
+            permissions = permissions.filter(duty_role_id=duty_role_id)
+        if resource_id:
+            permissions = permissions.filter(resource_id=resource_id)
+        
+        serializer = DutyRolePermissionSerializer(permissions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class DutyRolePermissionDeleteView(APIView):
+    """Remove a duty role permission"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def delete(self, request, pk):
+        """Delete duty role permission"""
+        try:
+            permission = DutyRolePermission.objects.get(pk=pk)
+            permission.delete()
+            return Response({'message': 'Permission deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+        except DutyRolePermission.DoesNotExist:
+            return Response({'error': 'Permission not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class UserPermissionOverrideView(APIView):
+    """Set or update permission override for a user"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def post(self, request):
+        """Set user permission override"""
+        serializer = UserPermissionOverrideSerializer(data=request.data)
+        if serializer.is_valid():
+            # Check if override already exists
+            user = serializer.validated_data['user']
+            duty_role = serializer.validated_data['duty_role']
+            resource = serializer.validated_data['resource']
+            
+            try:
+                existing = UserPermissionOverride.objects.get(
+                    user=user,
+                    duty_role=duty_role,
+                    resource=resource
+                )
+                # Update existing
+                serializer = UserPermissionOverrideSerializer(existing, data=request.data, partial=True)
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+            except UserPermissionOverride.DoesNotExist:
+                # Create new
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class UserPermissionOverrideListView(APIView):
+    """List user permission overrides"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def get(self, request):
+        """List all overrides or get overrides for a specific user"""
+        user_id = request.query_params.get('user_id')
+        
+        if user_id:
+            overrides = UserPermissionOverride.objects.filter(user_id=user_id)
+        else:
+            overrides = UserPermissionOverride.objects.all()
+        
+        serializer = UserPermissionOverrideSerializer(overrides, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class UserPermissionOverrideDeleteView(APIView):
+    """Remove a user permission override"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def delete(self, request, pk):
+        """Delete user permission override"""
+        try:
+            override = UserPermissionOverride.objects.get(pk=pk)
+            override.delete()
+            return Response({'message': 'Override deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+        except UserPermissionOverride.DoesNotExist:
+            return Response({'error': 'Override not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class UserEffectivePermissionsView(APIView):
+    """Get effective permissions for a user (including overrides)"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_authentication
+    def get(self, request):
+        """Get effective permissions for the authenticated user"""
+        user = request.user
+        resource_name = request.query_params.get('resource')
+        
+        permissions = get_user_permissions(user, resource_name)
+        
+        if permissions == {'_admin': 'full_access'}:
+            return Response({
+                'message': 'Admin/Super Admin has full access to all resources'
+            }, status=status.HTTP_200_OK)
+        
+        # Format permissions for response
+        permissions_list = []
+        for resource, perms in permissions.items():
+            permissions_list.append({
+                'resource': resource,
+                **perms
+            })
+        
+        return Response(permissions_list, status=status.HTTP_200_OK)

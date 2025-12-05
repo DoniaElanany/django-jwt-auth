@@ -62,29 +62,30 @@ def check_user_modification_permission(request_user, target_user):
     Check if request_user has permission to modify target_user
     
     Rules:
-    - Super admin can modify anyone (except can't change their own user_type)
+    - Super admin can modify anyone EXCEPT other super admins (including themselves)
     - Regular admin can only modify regular users (user_type=user)
     - Regular admin CANNOT modify other admins or super admin
     - Users cannot modify others
     
     Returns: (allowed: bool, error_message: str)
     """
-    # Super admin can modify anyone
+    # Cannot modify any super admin
+    if target_user.is_super_admin():
+        return False, "Cannot modify super admin users"
+    
+    # Super admin can modify anyone except super admins
     if request_user.is_super_admin():
         return True, None
     
     # Regular admin can only modify regular users
     if request_user.is_admin():
-        if target_user.is_super_admin():
-            return False, "Cannot modify the super admin user"
-        
         if target_user.is_admin():
             return False, "Regular admins cannot modify other admins"
         
         # Can modify regular users
         return True, None
     
-    # Regular users cannot modify others
+    # Regular users can only modify themselves
     if request_user.id != target_user.id:
         return False, "You can only modify your own profile"
     

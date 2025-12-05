@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import EmailValidator, RegexValidator
-from .models import CustomUser, UserType
+from .models import CustomUser, UserType, JobRole, DutyRole, Resource, DutyRolePermission, UserPermissionOverride
 import re
 
 
@@ -97,6 +97,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     """Serializer for user profile (users updating their own profile)"""
     user_type = serializers.CharField(source='user_type.type_name', read_only=True)
+    job_role_name = serializers.CharField(source='job_role.name', read_only=True)
     password = serializers.CharField(
         write_only=True,
         required=False,
@@ -105,8 +106,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = CustomUser
-        fields = ['id', 'email', 'name', 'phone_number', 'user_type', 'password']
-        read_only_fields = ['id', 'email', 'user_type']
+        fields = ['id', 'email', 'name', 'phone_number', 'user_type', 'job_role_name', 'password']
+        read_only_fields = ['id', 'email', 'user_type', 'job_role_name']
     
     def validate_phone_number(self, value):
         """Validate phone number format"""
@@ -154,6 +155,8 @@ class AdminUserSerializer(serializers.ModelSerializer):
     """Serializer for admin operations (full access to user fields)"""
     user_type = UserTypeSerializer(read_only=True)
     user_type_id = serializers.IntegerField(write_only=True, required=False)
+    job_role_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    job_role_name = serializers.CharField(source='job_role.name', read_only=True)
     password = serializers.CharField(
         write_only=True,
         required=False,
@@ -163,7 +166,8 @@ class AdminUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            'id', 'email', 'name', 'phone_number', 'user_type', 'user_type_id', 'password'
+            'id', 'email', 'name', 'phone_number', 'user_type', 'user_type_id', 
+            'job_role_id', 'job_role_name', 'password'
         ]
         read_only_fields = ['id']
     
@@ -250,6 +254,7 @@ class AdminUserSerializer(serializers.ModelSerializer):
         """Update user (admin operation)"""
         password = validated_data.pop('password', None)
         user_type_id = validated_data.pop('user_type_id', None)
+        job_role_id = validated_data.pop('job_role_id', None)
         
         # Update basic fields
         instance.name = validated_data.get('name', instance.name)
@@ -260,6 +265,17 @@ class AdminUserSerializer(serializers.ModelSerializer):
         if user_type_id:
             user_type = UserType.objects.get(pk=user_type_id)
             instance.user_type = user_type
+        
+        # Update job role if provided
+        if job_role_id is not None:
+            if job_role_id == 0:  # Allow explicitly removing job role
+                instance.job_role = None
+            else:
+                try:
+                    job_role = JobRole.objects.get(pk=job_role_id)
+                    instance.job_role = job_role
+                except JobRole.DoesNotExist:
+                    pass  # Silently ignore invalid job role ID
         
         # Update password if provided
         if password:
@@ -362,3 +378,186 @@ class SuperAdminPasswordResetSerializer(serializers.Serializer):
         except CustomUser.DoesNotExist:
             raise serializers.ValidationError("User not found")
         return value
+
+
+# ========================
+# Permission System Serializers
+# ========================
+
+class ResourceSerializer(serializers.ModelSerializer):
+    """Serializer for Resource model"""
+    class Meta:
+        model = Resource
+        fields = ['id', 'name', 'description']
+        read_only_fields = ['id']
+    
+    def validate_name(self, value):
+        """Validate resource name is unique"""
+        if self.instance is None:  # Creating new
+            if Resource.objects.filter(name=value).exists():
+                raise serializers.ValidationError("Resource with this name already exists")
+        else:  # Updating existing
+            if Resource.objects.filter(name=value).exclude(pk=self.instance.pk).exists():
+                raise serializers.ValidationError("Resource with this name already exists")
+        return value
+
+
+class DutyRoleSerializer(serializers.ModelSerializer):
+    """Serializer for DutyRole model"""
+    class Meta:
+        model = DutyRole
+        fields = ['id', 'name', 'description']
+        read_only_fields = ['id']
+    
+    def validate_name(self, value):
+        """Validate duty role name is unique"""
+        if self.instance is None:  # Creating new
+            if DutyRole.objects.filter(name=value).exists():
+                raise serializers.ValidationError("Duty role with this name already exists")
+        else:  # Updating existing
+            if DutyRole.objects.filter(name=value).exclude(pk=self.instance.pk).exists():
+                raise serializers.ValidationError("Duty role with this name already exists")
+        return value
+
+
+class JobRoleSerializer(serializers.ModelSerializer):
+    """Serializer for JobRole model"""
+    duty_roles = DutyRoleSerializer(many=True, read_only=True)
+    duty_role_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
+    
+    class Meta:
+        model = JobRole
+        fields = ['id', 'name', 'description', 'duty_roles', 'duty_role_ids']
+        read_only_fields = ['id']
+    
+    def validate_name(self, value):
+        """Validate job role name is unique"""
+        if self.instance is None:  # Creating new
+            if JobRole.objects.filter(name=value).exists():
+                raise serializers.ValidationError("Job role with this name already exists")
+        else:  # Updating existing
+            if JobRole.objects.filter(name=value).exclude(pk=self.instance.pk).exists():
+                raise serializers.ValidationError("Job role with this name already exists")
+        return value
+    
+    def validate_duty_role_ids(self, value):
+        """Validate duty roles exist"""
+        if value:
+            for duty_role_id in value:
+                if not DutyRole.objects.filter(pk=duty_role_id).exists():
+                    raise serializers.ValidationError(f"Duty role with id {duty_role_id} does not exist")
+        return value
+    
+    def create(self, validated_data):
+        """Create job role and assign duty roles"""
+        duty_role_ids = validated_data.pop('duty_role_ids', [])
+        job_role = JobRole.objects.create(**validated_data)
+        
+        if duty_role_ids:
+            duty_roles = DutyRole.objects.filter(pk__in=duty_role_ids)
+            job_role.duty_roles.set(duty_roles)
+        
+        return job_role
+    
+    def update(self, instance, validated_data):
+        """Update job role and duty roles"""
+        duty_role_ids = validated_data.pop('duty_role_ids', None)
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        if duty_role_ids is not None:
+            duty_roles = DutyRole.objects.filter(pk__in=duty_role_ids)
+            instance.duty_roles.set(duty_roles)
+        
+        return instance
+
+
+class DutyRolePermissionSerializer(serializers.ModelSerializer):
+    """Serializer for DutyRolePermission model"""
+    duty_role_name = serializers.CharField(source='duty_role.name', read_only=True)
+    resource_name = serializers.CharField(source='resource.name', read_only=True)
+    
+    class Meta:
+        model = DutyRolePermission
+        fields = [
+            'id', 'duty_role', 'duty_role_name', 'resource', 'resource_name',
+            'can_create', 'can_read', 'can_update', 'can_delete'
+        ]
+        read_only_fields = ['id']
+    
+    def validate(self, data):
+        """Validate unique constraint for duty_role + resource"""
+        duty_role = data.get('duty_role')
+        resource = data.get('resource')
+        
+        if self.instance is None:  # Creating new
+            if DutyRolePermission.objects.filter(duty_role=duty_role, resource=resource).exists():
+                raise serializers.ValidationError("Permission already exists for this duty role and resource")
+        else:  # Updating existing
+            if DutyRolePermission.objects.filter(
+                duty_role=duty_role, 
+                resource=resource
+            ).exclude(pk=self.instance.pk).exists():
+                raise serializers.ValidationError("Permission already exists for this duty role and resource")
+        
+        return data
+
+
+class UserPermissionOverrideSerializer(serializers.ModelSerializer):
+    """Serializer for UserPermissionOverride model"""
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    duty_role_name = serializers.CharField(source='duty_role.name', read_only=True)
+    resource_name = serializers.CharField(source='resource.name', read_only=True)
+    
+    class Meta:
+        model = UserPermissionOverride
+        fields = [
+            'id', 'user', 'user_email', 'duty_role', 'duty_role_name', 
+            'resource', 'resource_name',
+            'can_create', 'can_read', 'can_update', 'can_delete'
+        ]
+        read_only_fields = ['id']
+    
+    def validate(self, data):
+        """Validate unique constraint for user + duty_role + resource"""
+        user = data.get('user')
+        duty_role = data.get('duty_role')
+        resource = data.get('resource')
+        
+        # Validate user has this duty role through their job role
+        if user.job_role and duty_role not in user.job_role.duty_roles.all():
+            raise serializers.ValidationError(
+                f"User does not have the duty role '{duty_role.name}' in their job role"
+            )
+        
+        if self.instance is None:  # Creating new
+            if UserPermissionOverride.objects.filter(
+                user=user, 
+                duty_role=duty_role, 
+                resource=resource
+            ).exists():
+                raise serializers.ValidationError("Override already exists for this user, duty role, and resource")
+        else:  # Updating existing
+            if UserPermissionOverride.objects.filter(
+                user=user,
+                duty_role=duty_role,
+                resource=resource
+            ).exclude(pk=self.instance.pk).exists():
+                raise serializers.ValidationError("Override already exists for this user, duty role, and resource")
+        
+        return data
+
+
+class UserPermissionListSerializer(serializers.Serializer):
+    """Serializer for listing user permissions (read-only)"""
+    resource = serializers.CharField()
+    can_create = serializers.BooleanField()
+    can_read = serializers.BooleanField()
+    can_update = serializers.BooleanField()
+    can_delete = serializers.BooleanField()

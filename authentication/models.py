@@ -1,7 +1,7 @@
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import make_password
 from django.db import models
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models.signals import pre_delete, pre_save
 from django.dispatch import receiver
 
@@ -16,6 +16,88 @@ class UserType(models.Model):
     
     def __str__(self):
         return self.type_name
+
+
+class JobRole(models.Model):
+    """Job role model representing positions in the organization"""
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'job_roles'
+    
+    def __str__(self):
+        return self.name
+    
+    def delete(self, *args, **kwargs):
+        """Prevent deletion if job role is assigned to users"""
+        if self.users.exists():
+            raise ValidationError(f"Cannot delete job role '{self.name}' because it is assigned to {self.users.count()} user(s)")
+        return super().delete(*args, **kwargs)
+
+
+class DutyRole(models.Model):
+    """Duty role model representing specific responsibilities"""
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
+    job_roles = models.ManyToManyField(JobRole, related_name='duty_roles', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'duty_roles'
+    
+    def __str__(self):
+        return self.name
+    
+    def delete(self, *args, **kwargs):
+        """Prevent deletion if duty role has permissions or is linked to job roles"""
+        if self.permissions.exists():
+            raise ValidationError(f"Cannot delete duty role '{self.name}' because it has {self.permissions.count()} permission(s)")
+        if self.job_roles.exists():
+            raise ValidationError(f"Cannot delete duty role '{self.name}' because it is linked to {self.job_roles.count()} job role(s)")
+        return super().delete(*args, **kwargs)
+
+
+class Resource(models.Model):
+    """Resource model representing system resources that can be accessed"""
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'resources'
+    
+    def __str__(self):
+        return self.name
+    
+    def delete(self, *args, **kwargs):
+        """Prevent deletion if resource has permissions"""
+        if self.duty_role_permissions.exists():
+            raise ValidationError(f"Cannot delete resource '{self.name}' because it has {self.duty_role_permissions.count()} permission(s)")
+        return super().delete(*args, **kwargs)
+
+
+class DutyRolePermission(models.Model):
+    """Default CRUD permissions for duty roles on resources"""
+    duty_role = models.ForeignKey(DutyRole, on_delete=models.CASCADE, related_name='permissions')
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='duty_role_permissions')
+    can_create = models.BooleanField(default=False)
+    can_read = models.BooleanField(default=False)
+    can_update = models.BooleanField(default=False)
+    can_delete = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'duty_role_permissions'
+        unique_together = ('duty_role', 'resource')
+    
+    def __str__(self):
+        return f"{self.duty_role.name} - {self.resource.name}"
 
 
 class CustomUserManager(BaseUserManager):
@@ -86,6 +168,7 @@ class CustomUser(AbstractBaseUser):
     name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=15)
     user_type = models.ForeignKey(UserType, on_delete=models.PROTECT, related_name='users')
+    job_role = models.ForeignKey(JobRole, on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
     
     objects = CustomUserManager()
     
@@ -125,6 +208,26 @@ class CustomUser(AbstractBaseUser):
                 pass
         
         return super().save(*args, **kwargs)
+
+
+class UserPermissionOverride(models.Model):
+    """User-specific permission overrides"""
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='permission_overrides')
+    duty_role = models.ForeignKey(DutyRole, on_delete=models.CASCADE, related_name='user_overrides')
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='user_overrides')
+    can_create = models.BooleanField(null=True, blank=True)  # NULL = use default, False = explicitly denied, True = explicitly allowed
+    can_read = models.BooleanField(null=True, blank=True)
+    can_update = models.BooleanField(null=True, blank=True)
+    can_delete = models.BooleanField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'user_permission_overrides'
+        unique_together = ('user', 'duty_role', 'resource')
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.duty_role.name} - {self.resource.name}"
 
 
 # Signals for additional protection
