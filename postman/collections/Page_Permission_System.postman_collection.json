@@ -1,0 +1,946 @@
+{
+	"info": {
+		"_postman_id": "page-permission-system",
+		"name": "Page-Based Permission System API",
+		"description": "Complete API collection for Django Page-Based Permission System\n\nThis collection includes:\n- Authentication (Login, Register, Token Refresh)\n- User Management\n- Job Role Management\n- Page & Action Management\n- User Permissions & Denials\n- Permission Checking\n\n**Setup:**\n1. Set `base_url` variable to your API URL (e.g., http://localhost:8000/api)\n2. Login to get access_token (automatically saved)\n3. Use the endpoints as needed\n\n**Sample Users (after seed_data):**\n- Super Admin: superadmin@lightidea.com / SuperAdmin@123\n- Senior Accountant: ahmed@lightidea.com / Ahmed@123\n- Junior Accountant: sara@lightidea.com / Sara@123",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{access_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Register",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200 || pm.response.code === 201) {",
+									"    var jsonData = pm.response.json();",
+									"    if (jsonData.access_token) {",
+									"        pm.environment.set(\"access_token\", jsonData.access_token);",
+									"        pm.environment.set(\"refresh_token\", jsonData.refresh_token);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"testuser@example.com\",\n    \"name\": \"Test User\",\n    \"phone_number\": \"+201234567890\",\n    \"password\": \"TestPass@123\",\n    \"confirm_password\": \"TestPass@123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/register/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "register", ""]
+						},
+						"description": "Register a new user account"
+					},
+					"response": []
+				},
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var jsonData = pm.response.json();",
+									"    pm.environment.set(\"access_token\", jsonData.access_token);",
+									"    pm.environment.set(\"refresh_token\", jsonData.refresh_token);",
+									"    pm.environment.set(\"user_id\", jsonData.user.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"superadmin@lightidea.com\",\n    \"password\": \"SuperAdmin@123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/login/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "login", ""]
+						},
+						"description": "Login with email and password. Returns access and refresh tokens."
+					},
+					"response": []
+				},
+				{
+					"name": "Refresh Token",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var jsonData = pm.response.json();",
+									"    pm.environment.set(\"access_token\", jsonData.access);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"refresh\": \"{{refresh_token}}\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/token/refresh/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "token", "refresh", ""]
+						},
+						"description": "Get a new access token using refresh token"
+					},
+					"response": []
+				}
+			],
+			"description": "Authentication endpoints for user registration, login, and token management"
+		},
+		{
+			"name": "User Profile",
+			"item": [
+				{
+					"name": "Get My Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/profile/",
+							"host": ["{{base_url}}"],
+							"path": ["profile", ""]
+						},
+						"description": "Get current user's profile information"
+					},
+					"response": []
+				},
+				{
+					"name": "Update Profile",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Updated Name\",\n    \"phone_number\": \"+201234567890\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/profile/",
+							"host": ["{{base_url}}"],
+							"path": ["profile", ""]
+						},
+						"description": "Update current user's profile"
+					},
+					"response": []
+				},
+				{
+					"name": "Change Password",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"old_password\": \"OldPass@123\",\n    \"new_password\": \"NewPass@123\",\n    \"confirm_password\": \"NewPass@123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/change-password/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "change-password", ""]
+						},
+						"description": "Change current user's password"
+					},
+					"response": []
+				}
+			],
+			"description": "User profile management endpoints"
+		},
+		{
+			"name": "Admin - Users",
+			"item": [
+				{
+					"name": "List All Users",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/auth/admin/users/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "admin", "users", ""]
+						},
+						"description": "List all users (Admin/Super Admin only)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Details",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/users/{{user_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "users", "{{user_id}}", ""]
+						},
+						"description": "Get specific user details"
+					},
+					"response": []
+				},
+				{
+					"name": "Update User",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Updated Name\",\n    \"phone_number\": \"+201234567890\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/admin/users/{{user_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "users", "{{user_id}}", ""]
+						},
+						"description": "Update user information"
+					},
+					"response": []
+				},
+				{
+					"name": "Change User Type",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"user_type\": \"admin\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/admin/users/{{user_id}}/type/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "admin", "users", "{{user_id}}", "type", ""]
+						},
+						"description": "Change user type (user, admin, super_admin)"
+					},
+					"response": []
+				}
+			],
+			"description": "Admin endpoints for user management"
+		},
+		{
+			"name": "Admin - Job Roles",
+			"item": [
+				{
+					"name": "List Job Roles",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/job-roles/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "job-roles", ""]
+						},
+						"description": "Get list of all job roles (Super Admin only)"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Job Role",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    var jsonData = pm.response.json();",
+									"    pm.environment.set(\"job_role_id\", jsonData.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Sales Manager\",\n    \"description\": \"Manages sales team and customer relationships\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/admin/job-roles/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "job-roles", ""]
+						},
+						"description": "Create a new job role"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Job Role",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/job-roles/{{job_role_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "job-roles", "{{job_role_id}}", ""]
+						},
+						"description": "Get job role details with linked pages"
+					},
+					"response": []
+				},
+				{
+					"name": "Update Job Role",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Updated Job Role\",\n    \"description\": \"Updated description\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/admin/job-roles/{{job_role_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "job-roles", "{{job_role_id}}", ""]
+						},
+						"description": "Update job role information"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Job Role",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/job-roles/{{job_role_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "job-roles", "{{job_role_id}}", ""]
+						},
+						"description": "Delete a job role (cannot delete if assigned to users)"
+					},
+					"response": []
+				},
+				{
+					"name": "Link Pages to Job Role",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"page_ids\": [1, 2, 3]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/admin/job-roles/{{job_role_id}}/pages/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "admin", "job-roles", "{{job_role_id}}", "pages", ""]
+						},
+						"description": "Link multiple pages to a job role"
+					},
+					"response": []
+				},
+				{
+					"name": "Unlink Page from Job Role",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/auth/admin/job-roles/{{job_role_id}}/pages/{{page_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "admin", "job-roles", "{{job_role_id}}", "pages", "{{page_id}}", ""]
+						},
+						"description": "Remove a page from job role"
+					},
+					"response": []
+				}
+			],
+			"description": "Job role management endpoints (Super Admin only)"
+		},
+		{
+			"name": "Admin - Pages",
+			"item": [
+				{
+					"name": "List Pages",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/pages/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", ""]
+						},
+						"description": "Get list of all pages"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Page",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    var jsonData = pm.response.json();",
+									"    pm.environment.set(\"page_id\", jsonData.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Inventory\",\n    \"display_name\": \"Inventory Management\",\n    \"route\": \"/inventory\",\n    \"description\": \"Manage inventory and stock\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/admin/pages/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", ""]
+						},
+						"description": "Create a new page"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Page",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/pages/{{page_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", "{{page_id}}", ""]
+						},
+						"description": "Get page details with all actions"
+					},
+					"response": []
+				},
+				{
+					"name": "Update Page",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Inventory\",\n    \"display_name\": \"Updated Inventory Management\",\n    \"route\": \"/inventory\",\n    \"description\": \"Updated description\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/admin/pages/{{page_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", "{{page_id}}", ""]
+						},
+						"description": "Update page information"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Page",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/pages/{{page_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", "{{page_id}}", ""]
+						},
+						"description": "Delete a page (cannot delete if linked to job roles)"
+					},
+					"response": []
+				}
+			],
+			"description": "Page management endpoints (Super Admin only)"
+		},
+		{
+			"name": "Admin - Page Actions",
+			"item": [
+				{
+					"name": "List Page Actions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/pages/{{page_id}}/actions/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", "{{page_id}}", "actions", ""]
+						},
+						"description": "Get all actions for a specific page"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Page Action",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    var jsonData = pm.response.json();",
+									"    pm.environment.set(\"action_id\", jsonData.id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"add_item\",\n    \"display_name\": \"Add Item\",\n    \"description\": \"Add new item to inventory\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/admin/pages/{{page_id}}/actions/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", "{{page_id}}", "actions", ""]
+						},
+						"description": "Create a new action for a page"
+					},
+					"response": []
+				},
+				{
+					"name": "Update Page Action",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"add_item\",\n    \"display_name\": \"Add New Item\",\n    \"description\": \"Add new item to inventory system\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/admin/pages/{{page_id}}/actions/{{action_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", "{{page_id}}", "actions", "{{action_id}}", ""]
+						},
+						"description": "Update action information"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Page Action",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/admin/pages/{{page_id}}/actions/{{action_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["admin", "pages", "{{page_id}}", "actions", "{{action_id}}", ""]
+						},
+						"description": "Delete an action (cannot delete if has user denials)"
+					},
+					"response": []
+				}
+			],
+			"description": "Page action management endpoints (Super Admin only)"
+		},
+		{
+			"name": "User Permissions",
+			"item": [
+				{
+					"name": "Get User Permissions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/auth/users/{{user_id}}/permissions/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "users", "{{user_id}}", "permissions", ""]
+						},
+						"description": "Get user's effective permissions for all pages"
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Denied Actions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/auth/users/{{user_id}}/denied-actions/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "users", "{{user_id}}", "denied-actions", ""]
+						},
+						"description": "Get only denied actions for a user"
+					},
+					"response": []
+				},
+				{
+					"name": "Deny Action (by ID)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"page_action_id\": 5\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/users/{{user_id}}/deny-action/",
+							"host": ["{{base_url}}"],
+							"path": ["users", "{{user_id}}", "deny-action", ""]
+						},
+						"description": "Deny a specific action for user using action ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Deny Action (by Names)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"page_name\": \"Invoice\",\n    \"action_name\": \"approve_invoice\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/users/{{user_id}}/deny-action/",
+							"host": ["{{base_url}}"],
+							"path": ["users", "{{user_id}}", "deny-action", ""]
+						},
+						"description": "Deny a specific action for user using page and action names"
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Denial",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/auth/users/{{user_id}}/denied-actions/{{denial_id}}/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "users", "{{user_id}}", "denied-actions", "{{denial_id}}", ""]
+						},
+						"description": "Remove a denial to restore user access"
+					},
+					"response": []
+				},
+				{
+					"name": "Bulk Deny Actions",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"page_action_ids\": [5, 8, 12]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/users/{{user_id}}/deny-actions/bulk/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "users", "{{user_id}}", "deny-actions", "bulk", ""]
+						},
+						"description": "Deny multiple actions at once"
+					},
+					"response": []
+				},
+				{
+					"name": "Bulk Remove Denials",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"denial_ids\": [1, 2, 3]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/users/{{user_id}}/denied-actions/bulk/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "users", "{{user_id}}", "denied-actions", "bulk", ""]
+						},
+						"description": "Remove multiple denials at once"
+					},
+					"response": []
+				},
+				{
+					"name": "Assign Job Role",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"job_role_id\": 1,\n    \"clear_previous_denials\": false,\n    \"denied_action_ids\": [5, 8]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/users/{{user_id}}/job-role/",
+							"host": ["{{base_url}}"],
+							"path": ["users", "{{user_id}}", "job-role", ""]
+						},
+						"description": "Assign or change user's job role with optional denials"
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Job Role",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/users/{{user_id}}/job-role/",
+							"host": ["{{base_url}}"],
+							"path": ["users", "{{user_id}}", "job-role", ""]
+						},
+						"description": "Remove user's job role (clears all denials)"
+					},
+					"response": []
+				}
+			],
+			"description": "User permission management endpoints"
+		},
+		{
+			"name": "Permission Checks",
+			"item": [
+				{
+					"name": "Check Permission",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"page_name\": \"Invoice\",\n    \"action_name\": \"approve_invoice\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/check-permission/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "check-permission", ""]
+						},
+						"description": "Check if current user can perform a specific action"
+					},
+					"response": []
+				},
+				{
+					"name": "Bulk Check Permissions",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"checks\": [\n        {\"page_name\": \"Invoice\", \"action_name\": \"approve_invoice\"},\n        {\"page_name\": \"Payment\", \"action_name\": \"generate_payment\"},\n        {\"page_name\": \"Reports\", \"action_name\": \"export_report\"}\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/check-permissions/bulk/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "check-permissions", "bulk", ""]
+						},
+						"description": "Check multiple permissions at once"
+					},
+					"response": []
+				}
+			],
+			"description": "Permission checking endpoints"
+		},
+		{
+			"name": "Current User",
+			"item": [
+				{
+					"name": "Get My Permissions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/auth/me/permissions/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "me", "permissions", ""]
+						},
+						"description": "Get current user's permissions (only allowed actions)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get My Pages",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/auth/me/pages/",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "me", "pages", ""]
+						},
+						"description": "Get simplified list of pages accessible by current user"
+					},
+					"response": []
+				}
+			],
+			"description": "Current user's own permissions"
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "access_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refresh_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "user_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "job_role_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "page_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "action_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "denial_id",
+			"value": "",
+			"type": "string"
+		}
+	]
+}

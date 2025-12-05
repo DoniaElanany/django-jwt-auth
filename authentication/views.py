@@ -3,10 +3,14 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth import authenticate
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.exceptions import TokenError
-from .models import CustomUser, UserType, JobRole, DutyRole, Resource, DutyRolePermission, UserPermissionOverride
+from django.db import transaction
+from .models import (
+    CustomUser, UserType, JobRole,
+    Page, PageAction, JobRolePage, UserActionDenial
+)
 from .serializers import (
     UserRegistrationSerializer,
     UserProfileSerializer,
@@ -16,12 +20,21 @@ from .serializers import (
     ChangePasswordSerializer,
     PasswordResetRequestSerializer,
     SuperAdminPasswordResetSerializer,
+    # Page-based permission serializers
     JobRoleSerializer,
-    DutyRoleSerializer,
-    ResourceSerializer,
-    DutyRolePermissionSerializer,
-    UserPermissionOverrideSerializer,
-    UserPermissionListSerializer
+    PageSerializer,
+    PageListSerializer,
+    PageActionSerializer,
+    JobRoleDetailSerializer,
+    JobRoleListSerializer,
+    LinkPagesToJobRoleSerializer,
+    UserActionDenialSerializer,
+    DenyActionSerializer,
+    BulkDenyActionsSerializer,
+    BulkRemoveDenialsSerializer,
+    AssignJobRoleSerializer,
+    CheckPermissionSerializer,
+    BulkCheckPermissionsSerializer,
 )
 from .permissions import (
     require_authentication,
@@ -29,6 +42,12 @@ from .permissions import (
     require_super_admin,
     check_user_modification_permission,
     check_user_type_change_permission
+)
+from .permission_utils import (
+    user_can_perform_action,
+    get_user_page_permissions,
+    get_user_denied_actions,
+    get_user_accessible_pages
 )
 
 
@@ -464,27 +483,25 @@ class SuperAdminPasswordResetView(APIView):
             )
 
 
-# ========================
-# Permission System Views
-# ========================
+# ============================================
+# Page-Based Permission System Views
+# ============================================
 
-from .permission_utils import get_user_permissions
-
-
-class JobRoleListView(APIView):
-    """List all job roles or create a new one"""
+# Job Role Management Views
+class JobRoleListCreateView(APIView):
+    """List all job roles or create new job role (Super Admin only)"""
     permission_classes = [IsAuthenticated]
     
-    @require_admin
+    @require_super_admin
     def get(self, request):
         """List all job roles"""
         job_roles = JobRole.objects.all()
-        serializer = JobRoleSerializer(job_roles, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        serializer = JobRoleListSerializer(job_roles, many=True)
+        return Response({'job_roles': serializer.data}, status=status.HTTP_200_OK)
     
-    @require_admin
+    @require_super_admin
     def post(self, request):
-        """Create a new job role"""
+        """Create new job role"""
         serializer = JobRoleSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
@@ -492,26 +509,26 @@ class JobRoleListView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class JobRoleDetailView(APIView):
-    """Retrieve, update, or delete a job role"""
+class JobRolePageManagementView(APIView):
+    """Get, update, or delete a job role (Super Admin only)"""
     permission_classes = [IsAuthenticated]
     
-    @require_admin
+    @require_super_admin
     def get(self, request, pk):
-        """Get job role details"""
+        """Get job role with linked pages"""
         try:
             job_role = JobRole.objects.get(pk=pk)
-            serializer = JobRoleSerializer(job_role)
+            serializer = JobRoleDetailSerializer(job_role)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except JobRole.DoesNotExist:
             return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
     
-    @require_admin
+    @require_super_admin
     def put(self, request, pk):
         """Update job role"""
         try:
             job_role = JobRole.objects.get(pk=pk)
-            serializer = JobRoleSerializer(job_role, data=request.data, partial=True)
+            serializer = JobRoleSerializer(job_role, data=request.data)
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_200_OK)
@@ -519,7 +536,7 @@ class JobRoleDetailView(APIView):
         except JobRole.DoesNotExist:
             return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
     
-    @require_admin
+    @require_super_admin
     def delete(self, request, pk):
         """Delete job role"""
         try:
@@ -528,365 +545,552 @@ class JobRoleDetailView(APIView):
             return Response({'message': 'Job role deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
         except JobRole.DoesNotExist:
             return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+        except ValidationError as e:
+            return Response({'error': str(e.message)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class JobRoleDutyRolesView(APIView):
-    """List duty roles for a job role"""
+class JobRolePagesView(APIView):
+    """Link pages to job role or unlink a page (Super Admin only)"""
     permission_classes = [IsAuthenticated]
     
-    @require_admin
-    def get(self, request, pk):
-        """List all duty roles for a job role"""
+    @require_super_admin
+    def post(self, request, pk):
+        """Link pages to job role"""
         try:
             job_role = JobRole.objects.get(pk=pk)
-            duty_roles = job_role.duty_roles.all()
-            serializer = DutyRoleSerializer(duty_roles, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            serializer = LinkPagesToJobRoleSerializer(data=request.data)
+            
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            page_ids = serializer.validated_data['page_ids']
+            pages = Page.objects.filter(id__in=page_ids)
+            
+            with transaction.atomic():
+                for page in pages:
+                    JobRolePage.objects.get_or_create(
+                        job_role=job_role,
+                        page=page
+                    )
+            
+            return Response({
+                'message': f'Successfully linked {len(pages)} page(s) to job role'
+            }, status=status.HTTP_200_OK)
+            
         except JobRole.DoesNotExist:
             return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
-class JobRoleUsersView(APIView):
-    """List users with a specific job role"""
+class JobRolePageDetailView(APIView):
+    """Unlink a specific page from job role (Super Admin only)"""
     permission_classes = [IsAuthenticated]
     
-    @require_admin
-    def get(self, request, pk):
-        """List all users with this job role"""
+    @require_super_admin
+    def delete(self, request, pk, page_id):
+        """Unlink page from job role"""
         try:
             job_role = JobRole.objects.get(pk=pk)
-            users = CustomUser.objects.filter(job_role=job_role)
-            serializer = UserProfileSerializer(users, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except JobRole.DoesNotExist:
-            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
-
-
-class AssignDutyRoleView(APIView):
-    """Assign a duty role to a job role"""
-    permission_classes = [IsAuthenticated]
-    
-    @require_admin
-    def post(self, request, job_role_pk):
-        """Assign duty role to job role"""
-        try:
-            job_role = JobRole.objects.get(pk=job_role_pk)
-            duty_role_id = request.data.get('duty_role_id')
+            page = Page.objects.get(pk=page_id)
             
-            if not duty_role_id:
-                return Response({'error': 'duty_role_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+            job_role_page = JobRolePage.objects.filter(
+                job_role=job_role,
+                page=page
+            ).first()
             
-            try:
-                duty_role = DutyRole.objects.get(pk=duty_role_id)
-                job_role.duty_roles.add(duty_role)
-                return Response({'message': 'Duty role assigned successfully'}, status=status.HTTP_200_OK)
-            except DutyRole.DoesNotExist:
-                return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
-                
+            if not job_role_page:
+                return Response({
+                    'error': f"Page '{page.name}' is not linked to job role '{job_role.name}'"
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            job_role_page.delete()
+            return Response({
+                'message': f"Page '{page.name}' unlinked from job role '{job_role.name}'"
+            }, status=status.HTTP_204_NO_CONTENT)
+            
         except JobRole.DoesNotExist:
             return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Page.DoesNotExist:
+            return Response({'error': 'Page not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
-class RemoveDutyRoleView(APIView):
-    """Remove a duty role from a job role"""
+# Page Management Views
+class PageListCreateView(APIView):
+    """List all pages or create new page (Super Admin only)"""
     permission_classes = [IsAuthenticated]
     
-    @require_admin
-    def delete(self, request, job_role_pk, duty_role_pk):
-        """Remove duty role from job role"""
-        try:
-            job_role = JobRole.objects.get(pk=job_role_pk)
-            try:
-                duty_role = DutyRole.objects.get(pk=duty_role_pk)
-                job_role.duty_roles.remove(duty_role)
-                return Response({'message': 'Duty role removed successfully'}, status=status.HTTP_200_OK)
-            except DutyRole.DoesNotExist:
-                return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
-        except JobRole.DoesNotExist:
-            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
-
-
-class DutyRoleListView(APIView):
-    """List all duty roles or create a new one"""
-    permission_classes = [IsAuthenticated]
-    
-    @require_admin
+    @require_super_admin
     def get(self, request):
-        """List all duty roles"""
-        duty_roles = DutyRole.objects.all()
-        serializer = DutyRoleSerializer(duty_roles, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        """List all pages"""
+        pages = Page.objects.all()
+        serializer = PageListSerializer(pages, many=True)
+        return Response({'pages': serializer.data}, status=status.HTTP_200_OK)
     
-    @require_admin
+    @require_super_admin
     def post(self, request):
-        """Create a new duty role"""
-        serializer = DutyRoleSerializer(data=request.data)
+        """Create new page"""
+        serializer = PageSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-class DutyRoleDetailView(APIView):
-    """Retrieve, update, or delete a duty role"""
+class PageDetailView(APIView):
+    """Get, update, or delete a page (Super Admin only)"""
     permission_classes = [IsAuthenticated]
     
-    @require_admin
+    @require_super_admin
     def get(self, request, pk):
-        """Get duty role details"""
+        """Get page with actions"""
         try:
-            duty_role = DutyRole.objects.get(pk=pk)
-            serializer = DutyRoleSerializer(duty_role)
+            page = Page.objects.prefetch_related('actions').get(pk=pk)
+            serializer = PageSerializer(page)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        except DutyRole.DoesNotExist:
-            return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Page.DoesNotExist:
+            return Response({'error': 'Page not found'}, status=status.HTTP_404_NOT_FOUND)
     
-    @require_admin
+    @require_super_admin
     def put(self, request, pk):
-        """Update duty role"""
+        """Update page"""
         try:
-            duty_role = DutyRole.objects.get(pk=pk)
-            serializer = DutyRoleSerializer(duty_role, data=request.data, partial=True)
+            page = Page.objects.get(pk=pk)
+            serializer = PageSerializer(page, data=request.data, partial=True)
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        except DutyRole.DoesNotExist:
-            return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Page.DoesNotExist:
+            return Response({'error': 'Page not found'}, status=status.HTTP_404_NOT_FOUND)
     
-    @require_admin
+    @require_super_admin
     def delete(self, request, pk):
-        """Delete duty role"""
+        """Delete page"""
         try:
-            duty_role = DutyRole.objects.get(pk=pk)
-            duty_role.delete()
-            return Response({'message': 'Duty role deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
-        except DutyRole.DoesNotExist:
-            return Response({'error': 'Duty role not found'}, status=status.HTTP_404_NOT_FOUND)
+            page = Page.objects.get(pk=pk)
+            page.delete()
+            return Response({'message': 'Page deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+        except Page.DoesNotExist:
+            return Response({'error': 'Page not found'}, status=status.HTTP_404_NOT_FOUND)
+        except ValidationError as e:
+            return Response({'error': str(e.message)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class ResourceListView(APIView):
-    """List all resources or create a new one"""
+# Page Action Management Views
+class PageActionListCreateView(APIView):
+    """List all actions for a page or create new action (Super Admin only)"""
     permission_classes = [IsAuthenticated]
     
-    @require_admin
-    def get(self, request):
-        """List all resources"""
-        resources = Resource.objects.all()
-        serializer = ResourceSerializer(resources, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    
-    @require_admin
-    def post(self, request):
-        """Create a new resource"""
-        serializer = ResourceSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class ResourceDetailView(APIView):
-    """Retrieve or delete a resource"""
-    permission_classes = [IsAuthenticated]
-    
-    @require_admin
-    def get(self, request, pk):
-        """Get resource details"""
+    @require_super_admin
+    def get(self, request, page_id):
+        """List all actions for a page"""
         try:
-            resource = Resource.objects.get(pk=pk)
-            serializer = ResourceSerializer(resource)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except Resource.DoesNotExist:
-            return Response({'error': 'Resource not found'}, status=status.HTTP_404_NOT_FOUND)
+            page = Page.objects.get(pk=page_id)
+            actions = page.actions.all()
+            serializer = PageActionSerializer(actions, many=True)
+            return Response({'actions': serializer.data}, status=status.HTTP_200_OK)
+        except Page.DoesNotExist:
+            return Response({'error': 'Page not found'}, status=status.HTTP_404_NOT_FOUND)
     
-    @require_admin
-    def delete(self, request, pk):
-        """Delete resource"""
+    @require_super_admin
+    def post(self, request, page_id):
+        """Create action for page"""
         try:
-            resource = Resource.objects.get(pk=pk)
-            resource.delete()
-            return Response({'message': 'Resource deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
-        except Resource.DoesNotExist:
-            return Response({'error': 'Resource not found'}, status=status.HTTP_404_NOT_FOUND)
-
-
-class DutyRolePermissionView(APIView):
-    """Set or update permissions for a duty role on a resource"""
-    permission_classes = [IsAuthenticated]
-    
-    @require_admin
-    def post(self, request):
-        """Set duty role permission"""
-        serializer = DutyRolePermissionSerializer(data=request.data)
-        if serializer.is_valid():
-            # Check if permission already exists
-            duty_role = serializer.validated_data['duty_role']
-            resource = serializer.validated_data['resource']
+            page = Page.objects.get(pk=page_id)
+            data = request.data.copy()
+            data['page'] = page.id
             
-            try:
-                existing = DutyRolePermission.objects.get(duty_role=duty_role, resource=resource)
-                # Update existing
-                serializer = DutyRolePermissionSerializer(existing, data=request.data, partial=True)
-                if serializer.is_valid():
-                    serializer.save()
-                    return Response(serializer.data, status=status.HTTP_200_OK)
-            except DutyRolePermission.DoesNotExist:
-                # Create new
+            serializer = PageActionSerializer(data=data)
+            if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Page.DoesNotExist:
+            return Response({'error': 'Page not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class PageActionDetailView(APIView):
+    """Update or delete a page action (Super Admin only)"""
+    permission_classes = [IsAuthenticated]
     
-    @require_admin
-    def get(self, request):
-        """Get permissions for a duty role on a resource"""
-        duty_role_id = request.query_params.get('duty_role_id')
-        resource_id = request.query_params.get('resource_id')
-        
-        if not duty_role_id or not resource_id:
-            return Response(
-                {'error': 'duty_role_id and resource_id are required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
+    @require_super_admin
+    def put(self, request, page_id, action_id):
+        """Update action"""
         try:
-            permission = DutyRolePermission.objects.get(
-                duty_role_id=duty_role_id,
-                resource_id=resource_id
-            )
-            serializer = DutyRolePermissionSerializer(permission)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except DutyRolePermission.DoesNotExist:
-            return Response({'error': 'Permission not found'}, status=status.HTTP_404_NOT_FOUND)
-
-
-class DutyRolePermissionListView(APIView):
-    """List all duty role permissions"""
-    permission_classes = [IsAuthenticated]
-    
-    @require_admin
-    def get(self, request):
-        """List all duty role permissions with optional filtering"""
-        permissions = DutyRolePermission.objects.all()
-        
-        # Optional filters
-        duty_role_id = request.query_params.get('duty_role_id')
-        resource_id = request.query_params.get('resource_id')
-        
-        if duty_role_id:
-            permissions = permissions.filter(duty_role_id=duty_role_id)
-        if resource_id:
-            permissions = permissions.filter(resource_id=resource_id)
-        
-        serializer = DutyRolePermissionSerializer(permissions, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-class DutyRolePermissionDeleteView(APIView):
-    """Remove a duty role permission"""
-    permission_classes = [IsAuthenticated]
-    
-    @require_admin
-    def delete(self, request, pk):
-        """Delete duty role permission"""
-        try:
-            permission = DutyRolePermission.objects.get(pk=pk)
-            permission.delete()
-            return Response({'message': 'Permission deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
-        except DutyRolePermission.DoesNotExist:
-            return Response({'error': 'Permission not found'}, status=status.HTTP_404_NOT_FOUND)
-
-
-class UserPermissionOverrideView(APIView):
-    """Set or update permission override for a user"""
-    permission_classes = [IsAuthenticated]
-    
-    @require_admin
-    def post(self, request):
-        """Set user permission override"""
-        serializer = UserPermissionOverrideSerializer(data=request.data)
-        if serializer.is_valid():
-            # Check if override already exists
-            user = serializer.validated_data['user']
-            duty_role = serializer.validated_data['duty_role']
-            resource = serializer.validated_data['resource']
+            page = Page.objects.get(pk=page_id)
+            action = PageAction.objects.get(pk=action_id, page=page)
             
-            try:
-                existing = UserPermissionOverride.objects.get(
-                    user=user,
-                    duty_role=duty_role,
-                    resource=resource
-                )
-                # Update existing
-                serializer = UserPermissionOverrideSerializer(existing, data=request.data, partial=True)
-                if serializer.is_valid():
-                    serializer.save()
-                    return Response(serializer.data, status=status.HTTP_200_OK)
-            except UserPermissionOverride.DoesNotExist:
-                # Create new
+            serializer = PageActionSerializer(action, data=request.data, partial=True)
+            if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class UserPermissionOverrideListView(APIView):
-    """List user permission overrides"""
-    permission_classes = [IsAuthenticated]
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Page.DoesNotExist:
+            return Response({'error': 'Page not found'}, status=status.HTTP_404_NOT_FOUND)
+        except PageAction.DoesNotExist:
+            return Response({'error': 'Action not found'}, status=status.HTTP_404_NOT_FOUND)
     
-    @require_admin
-    def get(self, request):
-        """List all overrides or get overrides for a specific user"""
-        user_id = request.query_params.get('user_id')
-        
-        if user_id:
-            overrides = UserPermissionOverride.objects.filter(user_id=user_id)
-        else:
-            overrides = UserPermissionOverride.objects.all()
-        
-        serializer = UserPermissionOverrideSerializer(overrides, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-class UserPermissionOverrideDeleteView(APIView):
-    """Remove a user permission override"""
-    permission_classes = [IsAuthenticated]
-    
-    @require_admin
-    def delete(self, request, pk):
-        """Delete user permission override"""
+    @require_super_admin
+    def delete(self, request, page_id, action_id):
+        """Delete action"""
         try:
-            override = UserPermissionOverride.objects.get(pk=pk)
-            override.delete()
-            return Response({'message': 'Override deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
-        except UserPermissionOverride.DoesNotExist:
-            return Response({'error': 'Override not found'}, status=status.HTTP_404_NOT_FOUND)
+            page = Page.objects.get(pk=page_id)
+            action = PageAction.objects.get(pk=action_id, page=page)
+            action.delete()
+            return Response({'message': 'Action deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+        except Page.DoesNotExist:
+            return Response({'error': 'Page not found'}, status=status.HTTP_404_NOT_FOUND)
+        except PageAction.DoesNotExist:
+            return Response({'error': 'Action not found'}, status=status.HTTP_404_NOT_FOUND)
+        except ValidationError as e:
+            return Response({'error': str(e.message)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class UserEffectivePermissionsView(APIView):
-    """Get effective permissions for a user (including overrides)"""
+# User Permission Management Views
+class UserPermissionsView(APIView):
+    """Get user's effective page-based permissions"""
     permission_classes = [IsAuthenticated]
     
-    @require_authentication
-    def get(self, request):
-        """Get effective permissions for the authenticated user"""
-        user = request.user
-        resource_name = request.query_params.get('resource')
-        
-        permissions = get_user_permissions(user, resource_name)
-        
-        if permissions == {'_admin': 'full_access'}:
+    def get(self, request, user_id):
+        """Get user's effective permissions"""
+        # Check permission: user can view own permissions, or admin/super_admin can view any user
+        if request.user.id != user_id and not request.user.is_admin():
             return Response({
-                'message': 'Admin/Super Admin has full access to all resources'
-            }, status=status.HTTP_200_OK)
+                'error': 'You do not have permission to view this user\'s permissions'
+            }, status=status.HTTP_403_FORBIDDEN)
         
-        # Format permissions for response
-        permissions_list = []
-        for resource, perms in permissions.items():
-            permissions_list.append({
-                'resource': resource,
-                **perms
+        try:
+            user = CustomUser.objects.get(pk=user_id)
+            permissions = get_user_page_permissions(user)
+            return Response(permissions, status=status.HTTP_200_OK)
+        except CustomUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class UserDeniedActionsView(APIView):
+    """Get only denied actions for user"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, user_id):
+        """Get user's denied actions"""
+        # Check permission
+        if request.user.id != user_id and not request.user.is_admin():
+            return Response({
+                'error': 'You do not have permission to view this user\'s denied actions'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            user = CustomUser.objects.get(pk=user_id)
+            denied_actions = get_user_denied_actions(user)
+            return Response(denied_actions, status=status.HTTP_200_OK)
+        except CustomUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class UserDenyActionView(APIView):
+    """Deny specific action for user"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def post(self, request, user_id):
+        """Deny action for user"""
+        try:
+            user = CustomUser.objects.get(pk=user_id)
+            
+            # Cannot modify super admin
+            if user.is_super_admin():
+                return Response({
+                    'error': 'Cannot modify permissions for super admin'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            serializer = DenyActionSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Get the page action
+            if 'page_action_id' in serializer.validated_data:
+                page_action = PageAction.objects.get(id=serializer.validated_data['page_action_id'])
+            else:
+                page = Page.objects.get(name=serializer.validated_data['page_name'])
+                page_action = PageAction.objects.get(
+                    page=page,
+                    name=serializer.validated_data['action_name']
+                )
+            
+            # Create denial (or get existing)
+            denial, created = UserActionDenial.objects.get_or_create(
+                user=user,
+                page_action=page_action
+            )
+            
+            if created:
+                return Response({
+                    'success': True,
+                    'denial_id': denial.id,
+                    'message': f"Action '{page_action.name}' on page '{page_action.page.name}' denied for user"
+                }, status=status.HTTP_201_CREATED)
+            else:
+                return Response({
+                    'success': True,
+                    'denial_id': denial.id,
+                    'message': 'Action already denied for user'
+                }, status=status.HTTP_200_OK)
+                
+        except CustomUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        except (Page.DoesNotExist, PageAction.DoesNotExist) as e:
+            return Response({'error': str(e)}, status=status.HTTP_404_NOT_FOUND)
+
+
+class UserRemoveDenialView(APIView):
+    """Remove denial (restore access)"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def delete(self, request, user_id, denial_id):
+        """Remove action denial"""
+        try:
+            user = CustomUser.objects.get(pk=user_id)
+            denial = UserActionDenial.objects.get(pk=denial_id, user=user)
+            denial.delete()
+            return Response({
+                'success': True,
+                'message': 'Action denial removed, user now has access'
+            }, status=status.HTTP_200_OK)
+        except CustomUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        except UserActionDenial.DoesNotExist:
+            return Response({'error': 'Denial not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class UserBulkDenyActionsView(APIView):
+    """Deny multiple actions at once"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def post(self, request, user_id):
+        """Deny multiple actions for user"""
+        try:
+            user = CustomUser.objects.get(pk=user_id)
+            
+            if user.is_super_admin():
+                return Response({
+                    'error': 'Cannot modify permissions for super admin'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            serializer = BulkDenyActionsSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            page_action_ids = serializer.validated_data['page_action_ids']
+            denial_ids = []
+            
+            with transaction.atomic():
+                for action_id in page_action_ids:
+                    denial, _ = UserActionDenial.objects.get_or_create(
+                        user=user,
+                        page_action_id=action_id
+                    )
+                    denial_ids.append(denial.id)
+            
+            return Response({
+                'success': True,
+                'denied_count': len(denial_ids),
+                'denial_ids': denial_ids
+            }, status=status.HTTP_200_OK)
+            
+        except CustomUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class UserBulkRemoveDenialsView(APIView):
+    """Remove multiple denials"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def delete(self, request, user_id):
+        """Remove multiple action denials"""
+        try:
+            user = CustomUser.objects.get(pk=user_id)
+            serializer = BulkRemoveDenialsSerializer(data=request.data)
+            
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            denial_ids = serializer.validated_data['denial_ids']
+            
+            with transaction.atomic():
+                deleted_count = UserActionDenial.objects.filter(
+                    id__in=denial_ids,
+                    user=user
+                ).delete()[0]
+            
+            return Response({
+                'success': True,
+                'removed_count': deleted_count
+            }, status=status.HTTP_200_OK)
+            
+        except CustomUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+# User Job Role Assignment Views
+class UserJobRoleView(APIView):
+    """Assign/change or remove user's job role"""
+    permission_classes = [IsAuthenticated]
+    
+    @require_admin
+    def patch(self, request, user_id):
+        """Assign/change user's job role"""
+        try:
+            user = CustomUser.objects.get(pk=user_id)
+            
+            if user.is_super_admin():
+                return Response({
+                    'error': 'Cannot modify job role for super admin'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            serializer = AssignJobRoleSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            job_role = JobRole.objects.get(id=serializer.validated_data['job_role_id'])
+            clear_previous = serializer.validated_data.get('clear_previous_denials', False)
+            denied_action_ids = serializer.validated_data.get('denied_action_ids', [])
+            
+            with transaction.atomic():
+                # Assign job role
+                user.job_role = job_role
+                user.save()
+                
+                # Clear previous denials if requested
+                if clear_previous:
+                    UserActionDenial.objects.filter(user=user).delete()
+                
+                # Add new denials if provided
+                if denied_action_ids:
+                    for action_id in denied_action_ids:
+                        UserActionDenial.objects.get_or_create(
+                            user=user,
+                            page_action_id=action_id
+                        )
+            
+            message = f"Job role '{job_role.name}' assigned"
+            if denied_action_ids:
+                message += f" with {len(denied_action_ids)} action denial(s)"
+            
+            return Response({
+                'success': True,
+                'message': message
+            }, status=status.HTTP_200_OK)
+            
+        except CustomUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+        except JobRole.DoesNotExist:
+            return Response({'error': 'Job role not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @require_admin
+    def delete(self, request, user_id):
+        """Remove user's job role"""
+        try:
+            user = CustomUser.objects.get(pk=user_id)
+            
+            if user.is_super_admin():
+                return Response({
+                    'error': 'Cannot modify job role for super admin'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            with transaction.atomic():
+                user.job_role = None
+                user.save()
+                # Clear all denials since user has no job role
+                UserActionDenial.objects.filter(user=user).delete()
+            
+            return Response({
+                'success': True,
+                'message': 'Job role removed, all denials cleared'
+            }, status=status.HTTP_200_OK)
+            
+        except CustomUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+# Permission Check Views
+class CheckPermissionView(APIView):
+    """Check if current user can perform an action"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """Check single permission"""
+        serializer = CheckPermissionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        page_name = serializer.validated_data['page_name']
+        action_name = serializer.validated_data['action_name']
+        
+        allowed, reason = user_can_perform_action(request.user, page_name, action_name)
+        
+        if allowed:
+            return Response({'allowed': True}, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'allowed': False,
+                'reason': reason
+            }, status=status.HTTP_200_OK)
+
+
+class BulkCheckPermissionsView(APIView):
+    """Check multiple permissions at once"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """Check multiple permissions"""
+        serializer = BulkCheckPermissionsSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        checks = serializer.validated_data['checks']
+        results = []
+        
+        for check in checks:
+            page_name = check['page_name']
+            action_name = check['action_name']
+            allowed, _ = user_can_perform_action(request.user, page_name, action_name)
+            
+            results.append({
+                'page': page_name,
+                'action': action_name,
+                'allowed': allowed
             })
         
-        return Response(permissions_list, status=status.HTTP_200_OK)
+        return Response({'results': results}, status=status.HTTP_200_OK)
+
+
+# User's Own Permissions Views
+class MyPermissionsView(APIView):
+    """Get current user's permissions"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get current user's page permissions"""
+        permissions = get_user_page_permissions(request.user)
+        
+        # Remove denied actions from the response for cleaner output
+        if 'pages' in permissions:
+            for page in permissions['pages']:
+                page['actions'] = [
+                    action for action in page['actions']
+                    if action['allowed']
+                ]
+        
+        return Response(permissions, status=status.HTTP_200_OK)
+
+
+class MyPagesView(APIView):
+    """Get list of pages current user can access (simplified)"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get list of accessible pages"""
+        pages = get_user_accessible_pages(request.user)
+        return Response({'pages': pages}, status=status.HTTP_200_OK)

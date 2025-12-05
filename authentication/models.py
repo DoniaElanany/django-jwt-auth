@@ -38,66 +38,63 @@ class JobRole(models.Model):
         return super().delete(*args, **kwargs)
 
 
-class DutyRole(models.Model):
-    """Duty role model representing specific responsibilities"""
-    name = models.CharField(max_length=100, unique=True)
+class Page(models.Model):
+    """Page model representing functional areas of the system"""
+    name = models.CharField(max_length=100, unique=True, db_index=True)
+    display_name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
-    job_roles = models.ManyToManyField(JobRole, related_name='duty_roles', blank=True)
+    route = models.CharField(max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        db_table = 'duty_roles'
+        db_table = 'pages'
     
     def __str__(self):
-        return self.name
+        return f"{self.display_name} ({self.name})"
     
     def delete(self, *args, **kwargs):
-        """Prevent deletion if duty role has permissions or is linked to job roles"""
-        if self.permissions.exists():
-            raise ValidationError(f"Cannot delete duty role '{self.name}' because it has {self.permissions.count()} permission(s)")
+        """Prevent deletion if page is linked to job roles"""
         if self.job_roles.exists():
-            raise ValidationError(f"Cannot delete duty role '{self.name}' because it is linked to {self.job_roles.count()} job role(s)")
+            raise ValidationError(f"Cannot delete page '{self.name}' because it is linked to {self.job_roles.count()} job role(s)")
         return super().delete(*args, **kwargs)
 
 
-class Resource(models.Model):
-    """Resource model representing system resources that can be accessed"""
-    name = models.CharField(max_length=100, unique=True)
+class PageAction(models.Model):
+    """PageAction model representing specific actions that can be performed on a page"""
+    page = models.ForeignKey(Page, on_delete=models.CASCADE, related_name='actions')
+    name = models.CharField(max_length=100, db_index=True)
+    display_name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        db_table = 'resources'
+        db_table = 'page_actions'
+        unique_together = ('page', 'name')
     
     def __str__(self):
-        return self.name
+        return f"{self.page.name} - {self.display_name}"
     
     def delete(self, *args, **kwargs):
-        """Prevent deletion if resource has permissions"""
-        if self.duty_role_permissions.exists():
-            raise ValidationError(f"Cannot delete resource '{self.name}' because it has {self.duty_role_permissions.count()} permission(s)")
+        """Prevent deletion if action has user denials"""
+        if self.user_denials.exists():
+            raise ValidationError(f"Cannot delete action '{self.name}' because it has {self.user_denials.count()} user denial(s)")
         return super().delete(*args, **kwargs)
 
 
-class DutyRolePermission(models.Model):
-    """Default CRUD permissions for duty roles on resources"""
-    duty_role = models.ForeignKey(DutyRole, on_delete=models.CASCADE, related_name='permissions')
-    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='duty_role_permissions')
-    can_create = models.BooleanField(default=False)
-    can_read = models.BooleanField(default=False)
-    can_update = models.BooleanField(default=False)
-    can_delete = models.BooleanField(default=False)
+class JobRolePage(models.Model):
+    """Junction table linking job roles to their accessible pages"""
+    job_role = models.ForeignKey(JobRole, on_delete=models.CASCADE, related_name='job_role_pages')
+    page = models.ForeignKey(Page, on_delete=models.CASCADE, related_name='job_roles')
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        db_table = 'duty_role_permissions'
-        unique_together = ('duty_role', 'resource')
+        db_table = 'job_role_pages'
+        unique_together = ('job_role', 'page')
     
     def __str__(self):
-        return f"{self.duty_role.name} - {self.resource.name}"
+        return f"{self.job_role.name} - {self.page.name}"
 
 
 class CustomUserManager(BaseUserManager):
@@ -210,24 +207,19 @@ class CustomUser(AbstractBaseUser):
         return super().save(*args, **kwargs)
 
 
-class UserPermissionOverride(models.Model):
-    """User-specific permission overrides"""
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='permission_overrides')
-    duty_role = models.ForeignKey(DutyRole, on_delete=models.CASCADE, related_name='user_overrides')
-    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='user_overrides')
-    can_create = models.BooleanField(null=True, blank=True)  # NULL = use default, False = explicitly denied, True = explicitly allowed
-    can_read = models.BooleanField(null=True, blank=True)
-    can_update = models.BooleanField(null=True, blank=True)
-    can_delete = models.BooleanField(null=True, blank=True)
+class UserActionDenial(models.Model):
+    """User-specific action denials for page-based permissions"""
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='action_denials')
+    page_action = models.ForeignKey(PageAction, on_delete=models.CASCADE, related_name='user_denials')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        db_table = 'user_permission_overrides'
-        unique_together = ('user', 'duty_role', 'resource')
+        db_table = 'user_action_denials'
+        unique_together = ('user', 'page_action')
     
     def __str__(self):
-        return f"{self.user.email} - {self.duty_role.name} - {self.resource.name}"
+        return f"{self.user.email} - DENIED - {self.page_action}"
 
 
 # Signals for additional protection

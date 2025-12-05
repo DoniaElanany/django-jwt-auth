@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import EmailValidator, RegexValidator
-from .models import CustomUser, UserType, JobRole, DutyRole, Resource, DutyRolePermission, UserPermissionOverride
+from .models import CustomUser, UserType, JobRole,Page, PageAction, JobRolePage, UserActionDenial
 import re
 
 
@@ -380,55 +380,12 @@ class SuperAdminPasswordResetSerializer(serializers.Serializer):
         return value
 
 
-# ========================
-# Permission System Serializers
-# ========================
-
-class ResourceSerializer(serializers.ModelSerializer):
-    """Serializer for Resource model"""
-    class Meta:
-        model = Resource
-        fields = ['id', 'name', 'description']
-        read_only_fields = ['id']
-    
-    def validate_name(self, value):
-        """Validate resource name is unique"""
-        if self.instance is None:  # Creating new
-            if Resource.objects.filter(name=value).exists():
-                raise serializers.ValidationError("Resource with this name already exists")
-        else:  # Updating existing
-            if Resource.objects.filter(name=value).exclude(pk=self.instance.pk).exists():
-                raise serializers.ValidationError("Resource with this name already exists")
-        return value
-
-
-class DutyRoleSerializer(serializers.ModelSerializer):
-    """Serializer for DutyRole model"""
-    class Meta:
-        model = DutyRole
-        fields = ['id', 'name', 'description']
-        read_only_fields = ['id']
-    
-    def validate_name(self, value):
-        """Validate duty role name is unique"""
-        if self.instance is None:  # Creating new
-            if DutyRole.objects.filter(name=value).exists():
-                raise serializers.ValidationError("Duty role with this name already exists")
-        else:  # Updating existing
-            if DutyRole.objects.filter(name=value).exclude(pk=self.instance.pk).exists():
-                raise serializers.ValidationError("Duty role with this name already exists")
-        return value
-
+# ============================================
+# Page-Based Permission System Serializers
+# ============================================
 
 class JobRoleSerializer(serializers.ModelSerializer):
-    """Serializer for JobRole model"""
-    duty_roles = DutyRoleSerializer(many=True, read_only=True)
-    duty_role_ids = serializers.ListField(
-        child=serializers.IntegerField(),
-        write_only=True,
-        required=False
-    )
-    
+    """Serializer for JobRole model""" 
     class Meta:
         model = JobRole
         fields = ['id', 'name', 'description', 'duty_roles', 'duty_role_ids']
@@ -444,120 +401,301 @@ class JobRoleSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Job role with this name already exists")
         return value
     
-    def validate_duty_role_ids(self, value):
-        """Validate duty roles exist"""
-        if value:
-            for duty_role_id in value:
-                if not DutyRole.objects.filter(pk=duty_role_id).exists():
-                    raise serializers.ValidationError(f"Duty role with id {duty_role_id} does not exist")
-        return value
-    
     def create(self, validated_data):
         """Create job role and assign duty roles"""
-        duty_role_ids = validated_data.pop('duty_role_ids', [])
         job_role = JobRole.objects.create(**validated_data)
-        
-        if duty_role_ids:
-            duty_roles = DutyRole.objects.filter(pk__in=duty_role_ids)
-            job_role.duty_roles.set(duty_roles)
-        
         return job_role
     
     def update(self, instance, validated_data):
-        """Update job role and duty roles"""
-        duty_role_ids = validated_data.pop('duty_role_ids', None)
-        
+        """Update job role and duty roles"""        
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
         
-        if duty_role_ids is not None:
-            duty_roles = DutyRole.objects.filter(pk__in=duty_role_ids)
-            instance.duty_roles.set(duty_roles)
-        
         return instance
-
-
-class DutyRolePermissionSerializer(serializers.ModelSerializer):
-    """Serializer for DutyRolePermission model"""
-    duty_role_name = serializers.CharField(source='duty_role.name', read_only=True)
-    resource_name = serializers.CharField(source='resource.name', read_only=True)
+    
+class PageActionSerializer(serializers.ModelSerializer):
+    """Serializer for PageAction model"""
+    page_name = serializers.CharField(source='page.name', read_only=True)
     
     class Meta:
-        model = DutyRolePermission
-        fields = [
-            'id', 'duty_role', 'duty_role_name', 'resource', 'resource_name',
-            'can_create', 'can_read', 'can_update', 'can_delete'
-        ]
-        read_only_fields = ['id']
+        model = PageAction
+        fields = ['id', 'page', 'page_name', 'name', 'display_name', 'description', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
     
     def validate(self, data):
-        """Validate unique constraint for duty_role + resource"""
-        duty_role = data.get('duty_role')
-        resource = data.get('resource')
+        """Validate that action name is unique within the page"""
+        page = data.get('page')
+        name = data.get('name')
         
-        if self.instance is None:  # Creating new
-            if DutyRolePermission.objects.filter(duty_role=duty_role, resource=resource).exists():
-                raise serializers.ValidationError("Permission already exists for this duty role and resource")
-        else:  # Updating existing
-            if DutyRolePermission.objects.filter(
-                duty_role=duty_role, 
-                resource=resource
-            ).exclude(pk=self.instance.pk).exists():
-                raise serializers.ValidationError("Permission already exists for this duty role and resource")
+        if page and name:
+            query = PageAction.objects.filter(page=page, name=name)
+            if self.instance:
+                query = query.exclude(pk=self.instance.pk)
+            
+            if query.exists():
+                raise serializers.ValidationError({
+                    'name': f"Action '{name}' already exists for page '{page.name}'"
+                })
         
         return data
 
 
-class UserPermissionOverrideSerializer(serializers.ModelSerializer):
-    """Serializer for UserPermissionOverride model"""
-    user_email = serializers.EmailField(source='user.email', read_only=True)
-    duty_role_name = serializers.CharField(source='duty_role.name', read_only=True)
-    resource_name = serializers.CharField(source='resource.name', read_only=True)
+class PageSerializer(serializers.ModelSerializer):
+    """Serializer for Page model"""
+    actions = PageActionSerializer(many=True, read_only=True)
+    action_count = serializers.SerializerMethodField()
     
     class Meta:
-        model = UserPermissionOverride
-        fields = [
-            'id', 'user', 'user_email', 'duty_role', 'duty_role_name', 
-            'resource', 'resource_name',
-            'can_create', 'can_read', 'can_update', 'can_delete'
-        ]
-        read_only_fields = ['id']
+        model = Page
+        fields = ['id', 'name', 'display_name', 'description', 'route', 'actions', 'action_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_action_count(self, obj):
+        return obj.actions.count()
+
+
+class PageListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for listing pages"""
+    action_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Page
+        fields = ['id', 'name', 'display_name', 'route', 'action_count']
+    
+    def get_action_count(self, obj):
+        return obj.actions.count()
+
+
+class JobRolePageSerializer(serializers.ModelSerializer):
+    """Serializer for JobRolePage junction model"""
+    page_name = serializers.CharField(source='page.name', read_only=True)
+    page_display_name = serializers.CharField(source='page.display_name', read_only=True)
+    
+    class Meta:
+        model = JobRolePage
+        fields = ['id', 'job_role', 'page', 'page_name', 'page_display_name', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class JobRoleDetailSerializer(serializers.ModelSerializer):
+    """Detailed serializer for JobRole with linked pages"""
+    pages = serializers.SerializerMethodField()
+    user_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = JobRole
+        fields = ['id', 'name', 'description', 'pages', 'user_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_pages(self, obj):
+        job_role_pages = obj.job_role_pages.select_related('page').all()
+        return [{
+            'id': jrp.page.id,
+            'name': jrp.page.name,
+            'display_name': jrp.page.display_name,
+            'route': jrp.page.route
+        } for jrp in job_role_pages]
+    
+    def get_user_count(self, obj):
+        return obj.users.count()
+
+
+class JobRoleListSerializer(serializers.ModelSerializer):
+    """Simplified serializer for listing job roles"""
+    user_count = serializers.SerializerMethodField()
+    page_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = JobRole
+        fields = ['id', 'name', 'description', 'user_count', 'page_count']
+    
+    def get_user_count(self, obj):
+        return obj.users.count()
+    
+    def get_page_count(self, obj):
+        return obj.job_role_pages.count()
+
+
+class LinkPagesToJobRoleSerializer(serializers.Serializer):
+    """Serializer for linking multiple pages to a job role"""
+    page_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False
+    )
+    
+    def validate_page_ids(self, value):
+        """Validate that all page IDs exist"""
+        from .models import Page
+        
+        existing_ids = set(Page.objects.filter(id__in=value).values_list('id', flat=True))
+        invalid_ids = set(value) - existing_ids
+        
+        if invalid_ids:
+            raise serializers.ValidationError(f"Invalid page IDs: {list(invalid_ids)}")
+        
+        return value
+
+
+class UserActionDenialSerializer(serializers.ModelSerializer):
+    """Serializer for UserActionDenial model"""
+    page_name = serializers.CharField(source='page_action.page.name', read_only=True)
+    page_display_name = serializers.CharField(source='page_action.page.display_name', read_only=True)
+    action_name = serializers.CharField(source='page_action.name', read_only=True)
+    action_display_name = serializers.CharField(source='page_action.display_name', read_only=True)
+    
+    class Meta:
+        model = UserActionDenial
+        fields = ['id', 'user', 'page_action', 'page_name', 'page_display_name', 
+                  'action_name', 'action_display_name', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class DenyActionSerializer(serializers.Serializer):
+    """Serializer for denying a specific action for a user"""
+    page_action_id = serializers.IntegerField(required=False)
+    page_name = serializers.CharField(required=False)
+    action_name = serializers.CharField(required=False)
     
     def validate(self, data):
-        """Validate unique constraint for user + duty_role + resource"""
-        user = data.get('user')
-        duty_role = data.get('duty_role')
-        resource = data.get('resource')
+        """Validate that either page_action_id OR (page_name + action_name) is provided"""
+        has_action_id = 'page_action_id' in data
+        has_names = 'page_name' in data and 'action_name' in data
         
-        # Validate user has this duty role through their job role
-        if user.job_role and duty_role not in user.job_role.duty_roles.all():
+        if not has_action_id and not has_names:
             raise serializers.ValidationError(
-                f"User does not have the duty role '{duty_role.name}' in their job role"
+                "Either 'page_action_id' or both 'page_name' and 'action_name' must be provided"
             )
         
-        if self.instance is None:  # Creating new
-            if UserPermissionOverride.objects.filter(
-                user=user, 
-                duty_role=duty_role, 
-                resource=resource
-            ).exists():
-                raise serializers.ValidationError("Override already exists for this user, duty role, and resource")
-        else:  # Updating existing
-            if UserPermissionOverride.objects.filter(
-                user=user,
-                duty_role=duty_role,
-                resource=resource
-            ).exclude(pk=self.instance.pk).exists():
-                raise serializers.ValidationError("Override already exists for this user, duty role, and resource")
+        if has_action_id and has_names:
+            raise serializers.ValidationError(
+                "Provide either 'page_action_id' or 'page_name'+'action_name', not both"
+            )
+        
+        # Validate that the page action exists
+        if has_action_id:
+            from .models import PageAction
+            try:
+                PageAction.objects.get(id=data['page_action_id'])
+            except PageAction.DoesNotExist:
+                raise serializers.ValidationError({'page_action_id': 'Page action not found'})
+        
+        if has_names:
+            from .models import PageAction, Page
+            try:
+                page = Page.objects.get(name=data['page_name'])
+                PageAction.objects.get(page=page, name=data['action_name'])
+            except Page.DoesNotExist:
+                raise serializers.ValidationError({'page_name': f"Page '{data['page_name']}' not found"})
+            except PageAction.DoesNotExist:
+                raise serializers.ValidationError({
+                    'action_name': f"Action '{data['action_name']}' not found on page '{data['page_name']}'"
+                })
         
         return data
 
 
-class UserPermissionListSerializer(serializers.Serializer):
-    """Serializer for listing user permissions (read-only)"""
-    resource = serializers.CharField()
-    can_create = serializers.BooleanField()
-    can_read = serializers.BooleanField()
-    can_update = serializers.BooleanField()
-    can_delete = serializers.BooleanField()
+class BulkDenyActionsSerializer(serializers.Serializer):
+    """Serializer for denying multiple actions at once"""
+    page_action_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False
+    )
+    
+    def validate_page_action_ids(self, value):
+        """Validate that all page action IDs exist"""
+        from .models import PageAction
+        
+        existing_ids = set(PageAction.objects.filter(id__in=value).values_list('id', flat=True))
+        invalid_ids = set(value) - existing_ids
+        
+        if invalid_ids:
+            raise serializers.ValidationError(f"Invalid page action IDs: {list(invalid_ids)}")
+        
+        return value
+
+
+class BulkRemoveDenialsSerializer(serializers.Serializer):
+    """Serializer for removing multiple denials at once"""
+    denial_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False
+    )
+
+
+class AssignJobRoleSerializer(serializers.Serializer):
+    """Serializer for assigning/changing a user's job role"""
+    job_role_id = serializers.IntegerField()
+    clear_previous_denials = serializers.BooleanField(default=False)
+    denied_action_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True
+    )
+    
+    def validate_job_role_id(self, value):
+        """Validate that job role exists"""
+        from .models import JobRole
+        try:
+            JobRole.objects.get(id=value)
+        except JobRole.DoesNotExist:
+            raise serializers.ValidationError("Job role not found")
+        return value
+    
+    def validate_denied_action_ids(self, value):
+        """Validate that all denied action IDs exist"""
+        if value:
+            from .models import PageAction
+            existing_ids = set(PageAction.objects.filter(id__in=value).values_list('id', flat=True))
+            invalid_ids = set(value) - existing_ids
+            
+            if invalid_ids:
+                raise serializers.ValidationError(f"Invalid page action IDs: {list(invalid_ids)}")
+        
+        return value
+
+
+class CheckPermissionSerializer(serializers.Serializer):
+    """Serializer for checking a single permission"""
+    page_name = serializers.CharField()
+    action_name = serializers.CharField()
+
+
+class BulkCheckPermissionsSerializer(serializers.Serializer):
+    """Serializer for checking multiple permissions at once"""
+    checks = serializers.ListField(
+        child=serializers.DictField(),
+        allow_empty=False
+    )
+    
+    def validate_checks(self, value):
+        """Validate that each check has page_name and action_name"""
+        for check in value:
+            if 'page_name' not in check or 'action_name' not in check:
+                raise serializers.ValidationError(
+                    "Each check must contain 'page_name' and 'action_name'"
+                )
+        return value
+
+
+class UserPermissionResponseSerializer(serializers.Serializer):
+    """Serializer for user permission response"""
+    user_id = serializers.IntegerField()
+    name = serializers.CharField()
+    user_type = serializers.CharField()
+    job_role = serializers.DictField(allow_null=True)
+    pages = serializers.ListField()
+
+
+class UserDeniedActionsResponseSerializer(serializers.Serializer):
+    """Serializer for user denied actions response"""
+    user_id = serializers.IntegerField()
+    denied_actions = serializers.ListField()
+
+
+class UserPageListSerializer(serializers.Serializer):
+    """Serializer for simplified user page list"""
+    name = serializers.CharField()
+    display_name = serializers.CharField()
+    route = serializers.CharField()
+
